@@ -51,7 +51,8 @@ function getNextOrderId() {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -111,42 +112,49 @@ client.once('ready', async () => {
 // =========================
 // AUTO TICKET WELCOME
 // =========================
-client.on('channelCreate', async channel => {
+// Ticket Tool sends the first message when a ticket opens.
+// We use that message to detect the customer mention.
+client.on('messageCreate', async message => {
   try {
-    if (!channel.isTextBased() || !channel.guild) return;
+    if (!message.guild || message.author.bot === false) return;
 
-    // Ticket Tool may apply customer permissions shortly after
-    // the channel is created, so retry several times.
-    let customer = null;
+    // Only react to messages sent by Ticket Tool.
+    if (message.author.bot !== true) return;
+    if (!message.channel.isTextBased()) return;
 
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    // Give Ticket Tool a moment to finish setting up the ticket.
+    await new Promise(resolve => setTimeout(resolve, 500));
 
-      try {
-        await channel.permissionOverwrites.fetch();
-      } catch (error) {
-        console.error('Could not refresh ticket permissions:', error);
-      }
+    // Look for a non-bot user mention in the Ticket Tool message.
+    const mentionedUser = message.mentions.users.find(user => !user.bot);
 
-      customer = await findTicketCustomer(channel);
+    if (!mentionedUser) return;
 
-      if (customer) break;
+    // Only use this for the ticket-opening message.
+    const content = message.content || '';
+    const isTicketWelcome =
+      /welcome/i.test(content) ||
+      /support will be with you shortly/i.test(content) ||
+      /close this/i.test(content);
 
-      console.log(
-        `Ticket customer not detected yet | Ticket: ${channel.name} | Attempt: ${attempt}/8`
-      );
-    }
+    if (!isTicketWelcome) return;
 
-    if (!customer) {
-      console.log(`Could not detect ticket customer | Ticket: ${channel.name}`);
-      return;
-    }
+    // Avoid sending our welcome twice.
+    const recentMessages = await message.channel.messages.fetch({ limit: 25 });
+    const alreadySent = recentMessages.some(msg =>
+      msg.author.id === client.user.id &&
+      msg.embeds.some(embed =>
+        embed.title === '🎫 WELCOME TO CASPER SHOP'
+      )
+    );
+
+    if (alreadySent) return;
 
     const welcomeEmbed = new EmbedBuilder()
       .setColor('#8B0000')
       .setTitle('🎫 WELCOME TO CASPER SHOP')
       .setDescription(
-        `Hello <@${customer.id}>! 👋\n\n` +
+        `Hello <@${mentionedUser.id}>! 👋\n\n` +
         'Thank you for contacting **Casper Shop**.\n\n' +
         '📦 **How can we help?**\n' +
         'Please tell us what you need and provide your order details if applicable.\n\n' +
@@ -163,13 +171,13 @@ client.on('channelCreate', async channel => {
       })
       .setTimestamp();
 
-    await channel.send({
-      content: `<@${customer.id}>`,
+    await message.channel.send({
+      content: `<@${mentionedUser.id}>`,
       embeds: [welcomeEmbed]
     });
 
     console.log(
-      `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${customer.user.tag}`
+      `Ticket welcome sent | Ticket: ${message.channel.name} | Customer: ${mentionedUser.tag}`
     );
   } catch (error) {
     console.error('Could not send ticket welcome:', error);
