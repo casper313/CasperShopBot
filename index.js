@@ -112,35 +112,22 @@ client.once('ready', async () => {
 // =========================
 // AUTO TICKET WELCOME
 // =========================
-// Ticket Tool sends the first message when a ticket opens.
-// We use that message to detect the customer mention.
-client.on('messageCreate', async message => {
+// Ticket Tool creates channels with names such as ticket-0185.
+// We use the channel name instead of relying on customer detection.
+client.on('channelCreate', async channel => {
   try {
-    if (!message.guild || message.author.bot === false) return;
+    if (!channel.guild || !channel.isTextBased()) return;
 
-    // Only react to messages sent by Ticket Tool.
-    if (message.author.bot !== true) return;
-    if (!message.channel.isTextBased()) return;
+    const channelName = channel.name.toLowerCase();
 
-    // Give Ticket Tool a moment to finish setting up the ticket.
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Only react to Ticket Tool ticket channels.
+    if (!channelName.startsWith('ticket-')) return;
 
-    // Look for a non-bot user mention in the Ticket Tool message.
-    const mentionedUser = message.mentions.users.find(user => !user.bot);
+    // Wait for Ticket Tool to finish creating the ticket.
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    if (!mentionedUser) return;
-
-    // Only use this for the ticket-opening message.
-    const content = message.content || '';
-    const isTicketWelcome =
-      /welcome/i.test(content) ||
-      /support will be with you shortly/i.test(content) ||
-      /close this/i.test(content);
-
-    if (!isTicketWelcome) return;
-
-    // Avoid sending our welcome twice.
-    const recentMessages = await message.channel.messages.fetch({ limit: 25 });
+    // Prevent duplicate welcome messages.
+    const recentMessages = await channel.messages.fetch({ limit: 30 });
     const alreadySent = recentMessages.some(msg =>
       msg.author.id === client.user.id &&
       msg.embeds.some(embed =>
@@ -150,12 +137,15 @@ client.on('messageCreate', async message => {
 
     if (alreadySent) return;
 
+    // Try to detect the customer for a mention, but do not require it.
+    const customer = await findTicketCustomer(channel);
+    const mention = customer ? `<@${customer.id}>` : '';
+
     const welcomeEmbed = new EmbedBuilder()
       .setColor('#8B0000')
       .setTitle('🎫 WELCOME TO CASPER SHOP')
       .setDescription(
-        `Hello <@${mentionedUser.id}>! 👋\n\n` +
-        'Thank you for contacting **Casper Shop**.\n\n' +
+        'Thank you for contacting **Casper Shop**. 👋\n\n' +
         '📦 **How can we help?**\n' +
         'Please tell us what you need and provide your order details if applicable.\n\n' +
         '💳 **Payment**\n' +
@@ -171,13 +161,15 @@ client.on('messageCreate', async message => {
       })
       .setTimestamp();
 
-    await message.channel.send({
-      content: `<@${mentionedUser.id}>`,
+    await channel.send({
+      ...(mention ? { content: mention } : {}),
       embeds: [welcomeEmbed]
     });
 
     console.log(
-      `Ticket welcome sent | Ticket: ${message.channel.name} | Customer: ${mentionedUser.tag}`
+      `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${
+        customer?.user.tag || 'Not detected'
+      }`
     );
   } catch (error) {
     console.error('Could not send ticket welcome:', error);
