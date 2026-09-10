@@ -107,6 +107,75 @@ client.once('ready', async () => {
   console.log('Casper Shop Bot is online!');
 });
 
+
+// =========================
+// AUTO TICKET WELCOME
+// =========================
+client.on('channelCreate', async channel => {
+  try {
+    if (!channel.isTextBased() || !channel.guild) return;
+
+    // Ticket Tool may apply customer permissions shortly after
+    // the channel is created, so retry several times.
+    let customer = null;
+
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      try {
+        await channel.permissionOverwrites.fetch();
+      } catch (error) {
+        console.error('Could not refresh ticket permissions:', error);
+      }
+
+      customer = await findTicketCustomer(channel);
+
+      if (customer) break;
+
+      console.log(
+        `Ticket customer not detected yet | Ticket: ${channel.name} | Attempt: ${attempt}/8`
+      );
+    }
+
+    if (!customer) {
+      console.log(`Could not detect ticket customer | Ticket: ${channel.name}`);
+      return;
+    }
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor('#8B0000')
+      .setTitle('🎫 WELCOME TO CASPER SHOP')
+      .setDescription(
+        `Hello <@${customer.id}>! 👋\n\n` +
+        'Thank you for contacting **Casper Shop**.\n\n' +
+        '📦 **How can we help?**\n' +
+        'Please tell us what you need and provide your order details if applicable.\n\n' +
+        '💳 **Payment**\n' +
+        'Please wait for a staff member before sending payment.\n\n' +
+        '⚡ **Fast Delivery**\n' +
+        'Once your payment is confirmed, your code will be delivered directly in this ticket.\n\n' +
+        '🛡️ **Security**\n' +
+        'Never share your Steam password or other sensitive information.\n\n' +
+        'A staff member will assist you shortly. ❤️'
+      )
+      .setFooter({
+        text: 'Casper Shop • Support'
+      })
+      .setTimestamp();
+
+    await channel.send({
+      content: `<@${customer.id}>`,
+      embeds: [welcomeEmbed]
+    });
+
+    console.log(
+      `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${customer.user.tag}`
+    );
+  } catch (error) {
+    console.error('Could not send ticket welcome:', error);
+  }
+});
+
 client.on('interactionCreate', async interaction => {
 
   // /deliver
