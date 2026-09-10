@@ -385,4 +385,11 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim().replace(/^["']|["']$/g, '');
+
+if (!DISCORD_TOKEN) {
+  console.error('DISCORD_TOKEN is missing.');
+  process.exit(1);
+}
+
+client.login(DISCORD_TOKEN);
