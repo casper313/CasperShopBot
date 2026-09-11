@@ -51,8 +51,7 @@ function getNextOrderId() {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMessages
   ]
 });
 
@@ -106,74 +105,6 @@ client.once('ready', async () => {
   }
 
   console.log('Casper Shop Bot is online!');
-});
-
-
-// =========================
-// AUTO TICKET WELCOME
-// =========================
-// Ticket Tool creates channels with names such as ticket-0185.
-// We use the channel name instead of relying on customer detection.
-client.on('channelCreate', async channel => {
-  try {
-    if (!channel.guild || !channel.isTextBased()) return;
-
-    const channelName = channel.name.toLowerCase();
-
-    // Only react to Ticket Tool ticket channels.
-    if (!channelName.startsWith('ticket-')) return;
-
-    // Wait for Ticket Tool to finish creating the ticket.
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // Prevent duplicate welcome messages.
-    const recentMessages = await channel.messages.fetch({ limit: 30 });
-    const alreadySent = recentMessages.some(msg =>
-      msg.author.id === client.user.id &&
-      msg.embeds.some(embed =>
-        embed.title === '🎫 WELCOME TO CASPER SHOP'
-      )
-    );
-
-    if (alreadySent) return;
-
-    // Try to detect the customer for a mention, but do not require it.
-    const customer = await findTicketCustomer(channel);
-    const mention = customer ? `<@${customer.id}>` : '';
-
-    const welcomeEmbed = new EmbedBuilder()
-      .setColor('#8B0000')
-      .setTitle('🎫 WELCOME TO CASPER SHOP')
-      .setDescription(
-        'Thank you for contacting **Casper Shop**. 👋\n\n' +
-        '📦 **How can we help?**\n' +
-        'Please tell us what you need and provide your order details if applicable.\n\n' +
-        '💳 **Payment**\n' +
-        'Please wait for a staff member before sending payment.\n\n' +
-        '⚡ **Fast Delivery**\n' +
-        'Once your payment is confirmed, your code will be delivered directly in this ticket.\n\n' +
-        '🛡️ **Security**\n' +
-        'Never share your Steam password or other sensitive information.\n\n' +
-        'A staff member will assist you shortly. ❤️'
-      )
-      .setFooter({
-        text: 'Casper Shop • Support'
-      })
-      .setTimestamp();
-
-    await channel.send({
-      ...(mention ? { content: mention } : {}),
-      embeds: [welcomeEmbed]
-    });
-
-    console.log(
-      `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${
-        customer?.user.tag || 'Not detected'
-      }`
-    );
-  } catch (error) {
-    console.error('Could not send ticket welcome:', error);
-  }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -307,21 +238,36 @@ client.on('interactionCreate', async interaction => {
         embeds: [logEmbed]
       });
 
-      // Buttons
+      // COPY CODE
       const copyButton = new ButtonBuilder()
         .setCustomId(`copy_code:${encodeURIComponent(code)}`)
         .setLabel('COPY CODE')
         .setEmoji('📋')
         .setStyle(ButtonStyle.Primary);
 
+      // DONE
       const doneButton = new ButtonBuilder()
         .setCustomId(`delivery_done:${logMessage.id}`)
         .setLabel('DONE')
         .setEmoji('✅')
         .setStyle(ButtonStyle.Success);
 
+      // RATE US
+      const rateButton = new ButtonBuilder()
+        .setLabel('RATE US')
+        .setEmoji('⭐')
+        .setStyle(ButtonStyle.Link)
+        .setURL(
+          'https://discord.com/channels/939586775561695332/1396875023905591356'
+        );
+
+      // 3 buttons
       const row = new ActionRowBuilder()
-        .addComponents(copyButton, doneButton);
+        .addComponents(
+          copyButton,
+          doneButton,
+          rateButton
+        );
 
       await interaction.editReply({
         components: [row]
@@ -368,7 +314,6 @@ client.on('interactionCreate', async interaction => {
       const logMessageId = interaction.customId.split(':')[1];
       const oldEmbed = interaction.message.embeds[0];
 
-      // Keep all original information, including Order ID and Delivered At
       const completedEmbed = new EmbedBuilder(oldEmbed.toJSON())
         .setColor('#2E7D32')
         .setTitle('✅ DELIVERY COMPLETED')
@@ -454,7 +399,9 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim().replace(/^["']|["']$/g, '');
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN
+  ?.trim()
+  .replace(/^["']|["']$/g, '');
 
 if (!DISCORD_TOKEN) {
   console.error('DISCORD_TOKEN is missing.');
