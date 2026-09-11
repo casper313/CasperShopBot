@@ -18,6 +18,9 @@ const {
 
 const LOG_CHANNEL_ID = '1547699058091761826';
 
+// ⭐ Customer Review Channel
+const REVIEW_CHANNEL_ID = '1396875023905591356';
+
 // Persistent Order ID counter
 const COUNTER_FILE = path.join(__dirname, 'order-counter.json');
 
@@ -119,13 +122,10 @@ client.on('channelCreate', async channel => {
 
     const channelName = channel.name.toLowerCase();
 
-    // Only react to Ticket Tool ticket channels
     if (!channelName.startsWith('ticket-')) return;
 
-    // Wait for Ticket Tool to finish creating the ticket
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Prevent duplicate welcome messages
     const recentMessages = await channel.messages.fetch({ limit: 30 });
 
     const alreadySent = recentMessages.some(msg =>
@@ -137,7 +137,6 @@ client.on('channelCreate', async channel => {
 
     if (alreadySent) return;
 
-    // Try to detect the customer
     const customer = await findTicketCustomer(channel);
     const mention = customer ? `<@${customer.id}>` : '';
 
@@ -206,9 +205,14 @@ client.on('interactionCreate', async interaction => {
       : 'Customer not detected';
 
     const orderId = getNextOrderId();
+
     const deliveredAt = Math.floor(Date.now() / 1000);
 
-    // Delivery message
+
+    // =========================
+    // DELIVERY MESSAGE
+    // =========================
+
     const embed = new EmbedBuilder()
       .setColor('#8B0000')
       .setTitle('🎁 CODE DELIVERY — CASPER SHOP')
@@ -239,6 +243,7 @@ client.on('interactionCreate', async interaction => {
       })
       .setTimestamp();
 
+
     // Temporary button
     const temporaryButton = new ButtonBuilder()
       .setCustomId('delivery_loading')
@@ -255,9 +260,13 @@ client.on('interactionCreate', async interaction => {
       components: [temporaryRow]
     });
 
+
     try {
 
-      // Delivery log
+      // =========================
+      // DELIVERY LOG
+      // =========================
+
       const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
 
       if (!logChannel) {
@@ -315,33 +324,27 @@ client.on('interactionCreate', async interaction => {
 
 
       // =========================
-      // DELIVERY BUTTONS
+      // BUTTONS
       // =========================
 
-      // COPY CODE
       const copyButton = new ButtonBuilder()
         .setCustomId(`copy_code:${encodeURIComponent(code)}`)
         .setLabel('COPY CODE')
         .setEmoji('📋')
         .setStyle(ButtonStyle.Primary);
 
-      // DONE
       const doneButton = new ButtonBuilder()
         .setCustomId(`delivery_done:${logMessage.id}`)
         .setLabel('DONE')
         .setEmoji('✅')
         .setStyle(ButtonStyle.Success);
 
-      // RATE US
       const rateButton = new ButtonBuilder()
+        .setCustomId(`rate_order:${orderId}`)
         .setLabel('RATE US')
         .setEmoji('⭐')
-        .setStyle(ButtonStyle.Link)
-        .setURL(
-          'https://discord.com/channels/939586775561695332/1396875023905591356'
-        );
+        .setStyle(ButtonStyle.Primary);
 
-      // Three buttons
       const row = new ActionRowBuilder()
         .addComponents(
           copyButton,
@@ -373,7 +376,11 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.isButton()) {
 
+
+    // =========================
     // COPY CODE
+    // =========================
+
     if (interaction.customId.startsWith('copy_code:')) {
 
       const encodedCode = interaction.customId.substring(
@@ -393,29 +400,186 @@ client.on('interactionCreate', async interaction => {
     }
 
 
+    // =========================
+    // ⭐ RATE US
+    // =========================
+
+    if (interaction.customId.startsWith('rate_order:')) {
+
+      const orderId = interaction.customId.substring(
+        'rate_order:'.length
+      );
+
+      const starButtons = [1, 2, 3, 4, 5].map(rating =>
+        new ButtonBuilder()
+          .setCustomId(
+            `submit_rating:${orderId}:${rating}`
+          )
+          .setLabel(`${rating}/5`)
+          .setEmoji('⭐')
+          .setStyle(
+            rating === 5
+              ? ButtonStyle.Success
+              : ButtonStyle.Primary
+          )
+      );
+
+      const ratingRow = new ActionRowBuilder()
+        .addComponents(starButtons);
+
+      await interaction.reply({
+        content:
+          '⭐ **How was your experience with Casper Shop?**\n' +
+          'Please choose a rating below:',
+        components: [ratingRow],
+        ephemeral: true
+      });
+
+      return;
+    }
+
+
+    // =========================
+    // ⭐ SUBMIT RATING
+    // =========================
+
+    if (interaction.customId.startsWith('submit_rating:')) {
+
+      const parts = interaction.customId.split(':');
+
+      const orderId = parts[1];
+      const rating = Number(parts[2]);
+
+      if (
+        !Number.isInteger(rating) ||
+        rating < 1 ||
+        rating > 5
+      ) {
+        return interaction.reply({
+          content: '❌ Invalid rating.',
+          ephemeral: true
+        });
+      }
+
+      try {
+
+        const reviewChannel =
+          await client.channels.fetch(
+            REVIEW_CHANNEL_ID
+          );
+
+        if (!reviewChannel) {
+          throw new Error(
+            'Review channel not found.'
+          );
+        }
+
+        const stars =
+          '⭐'.repeat(rating) +
+          '☆'.repeat(5 - rating);
+
+        const reviewEmbed = new EmbedBuilder()
+          .setColor('#8B0000')
+          .setTitle('⭐ NEW CUSTOMER REVIEW')
+          .addFields(
+            {
+              name: '👤 Customer',
+              value: `<@${interaction.user.id}>`,
+              inline: true
+            },
+            {
+              name: '🧾 Order ID',
+              value: `\`${orderId}\``,
+              inline: true
+            },
+            {
+              name: '⭐ Rating',
+              value: `${stars} (${rating}/5)`,
+              inline: true
+            }
+          )
+          .setDescription(
+            'Thank you for choosing **Casper Shop**! ❤️'
+          )
+          .setFooter({
+            text: 'Casper Shop • Customer Reviews'
+          })
+          .setTimestamp();
+
+        await reviewChannel.send({
+          embeds: [reviewEmbed]
+        });
+
+        await interaction.update({
+          content:
+            `⭐ **Thank you for rating Casper Shop!**\n\n` +
+            `Your rating: ${stars}`,
+          components: []
+        });
+
+      } catch (error) {
+
+        console.error(
+          'Could not submit review:',
+          error
+        );
+
+        await interaction.update({
+          content:
+            '❌ Could not submit your review. Please contact staff.',
+          components: []
+        });
+      }
+
+      return;
+    }
+
+
+    // =========================
     // DONE
-    if (interaction.customId.startsWith('delivery_done:')) {
+    // =========================
 
-      const logMessageId = interaction.customId.split(':')[1];
-      const oldEmbed = interaction.message.embeds[0];
+    if (
+      interaction.customId.startsWith(
+        'delivery_done:'
+      )
+    ) {
 
-      const completedEmbed = new EmbedBuilder(oldEmbed.toJSON())
-        .setColor('#2E7D32')
-        .setTitle('✅ DELIVERY COMPLETED')
-        .setFooter({
-          text: `Casper Shop • Completed by ${interaction.user.username}`
-        })
-        .setTimestamp();
+      const logMessageId =
+        interaction.customId.split(':')[1];
 
-      const completedButton = new ButtonBuilder()
-        .setCustomId('delivery_completed')
-        .setLabel('COMPLETED')
-        .setEmoji('✅')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(true);
+      const oldEmbed =
+        interaction.message.embeds[0];
 
-      const row = new ActionRowBuilder()
-        .addComponents(completedButton);
+
+      const completedEmbed =
+        new EmbedBuilder(oldEmbed.toJSON())
+          .setColor('#2E7D32')
+          .setTitle('✅ DELIVERY COMPLETED')
+          .setFooter({
+            text:
+              `Casper Shop • Completed by ${interaction.user.username}`
+          })
+          .setTimestamp();
+
+
+      const completedButton =
+        new ButtonBuilder()
+          .setCustomId(
+            'delivery_completed'
+          )
+          .setLabel('COMPLETED')
+          .setEmoji('✅')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true);
+
+
+      const row =
+        new ActionRowBuilder()
+          .addComponents(
+            completedButton
+          );
+
 
       await interaction.update({
         embeds: [completedEmbed],
@@ -423,64 +587,97 @@ client.on('interactionCreate', async interaction => {
       });
 
 
-      // Update delivery log
+      // =========================
+      // UPDATE DELIVERY LOG
+      // =========================
+
       try {
 
-        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
+        const logChannel =
+          await client.channels.fetch(
+            LOG_CHANNEL_ID
+          );
 
         const logMessage =
-          await logChannel.messages.fetch(logMessageId);
+          await logChannel.messages.fetch(
+            logMessageId
+          );
 
-        const oldLogEmbed = logMessage.embeds[0];
+        const oldLogEmbed =
+          logMessage.embeds[0];
 
-        const fields = oldLogEmbed.fields
-          .filter(field => field.name !== '📊 Status')
-          .filter(field => field.name !== '✅ Completed By')
-          .filter(field => field.name !== '🕐 Completed At')
-          .map(field => ({
-            name: field.name,
-            value: field.value,
-            inline: field.inline
-          }));
+
+        const fields =
+          oldLogEmbed.fields
+            .filter(
+              field =>
+                field.name !== '📊 Status'
+            )
+            .filter(
+              field =>
+                field.name !== '✅ Completed By'
+            )
+            .filter(
+              field =>
+                field.name !== '🕐 Completed At'
+            )
+            .map(field => ({
+              name: field.name,
+              value: field.value,
+              inline: field.inline
+            }));
+
 
         const completedAt =
-          Math.floor(Date.now() / 1000);
+          Math.floor(
+            Date.now() / 1000
+          );
 
-        const completedLogEmbed = new EmbedBuilder()
-          .setColor('#2E7D32')
-          .setTitle('✅ DELIVERY COMPLETED')
-          .addFields(
-            ...fields,
-            {
-              name: '📊 Status',
-              value: '🟢 Completed',
-              inline: true
-            },
-            {
-              name: '✅ Completed By',
-              value: `<@${interaction.user.id}>`,
-              inline: true
-            },
-            {
-              name: '🕐 Completed At',
-              value: `<t:${completedAt}:F>`,
-              inline: true
-            }
-          )
-          .setFooter({
-            text: 'Casper Shop • Delivery Logs'
-          })
-          .setTimestamp();
+
+        const completedLogEmbed =
+          new EmbedBuilder()
+            .setColor('#2E7D32')
+            .setTitle(
+              '✅ DELIVERY COMPLETED'
+            )
+            .addFields(
+              ...fields,
+              {
+                name: '📊 Status',
+                value: '🟢 Completed',
+                inline: true
+              },
+              {
+                name: '✅ Completed By',
+                value:
+                  `<@${interaction.user.id}>`,
+                inline: true
+              },
+              {
+                name: '🕐 Completed At',
+                value:
+                  `<t:${completedAt}:F>`,
+                inline: true
+              }
+            )
+            .setFooter({
+              text:
+                'Casper Shop • Delivery Logs'
+            })
+            .setTimestamp();
+
 
         await logMessage.edit({
           embeds: [completedLogEmbed]
         });
+
 
         console.log(
           `Delivery completed | Completed by: ${interaction.user.tag}`
         );
 
       } catch (error) {
+
         console.error(
           'Could not update delivery log:',
           error
@@ -494,15 +691,19 @@ client.on('interactionCreate', async interaction => {
 
 
 // =========================
-// DISCORD LOGIN
+// LOGIN
 // =========================
 
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN
-  ?.trim()
-  .replace(/^["']|["']$/g, '');
+const DISCORD_TOKEN =
+  process.env.DISCORD_TOKEN
+    ?.trim()
+    .replace(/^["']|["']$/g, '');
 
 if (!DISCORD_TOKEN) {
-  console.error('DISCORD_TOKEN is missing.');
+  console.error(
+    'DISCORD_TOKEN is missing.'
+  );
+
   process.exit(1);
 }
 
