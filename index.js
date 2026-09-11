@@ -51,7 +51,8 @@ function getNextOrderId() {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -107,9 +108,82 @@ client.once('ready', async () => {
   console.log('Casper Shop Bot is online!');
 });
 
+
+// =========================
+// AUTO TICKET WELCOME
+// =========================
+
+client.on('channelCreate', async channel => {
+  try {
+    if (!channel.guild || !channel.isTextBased()) return;
+
+    const channelName = channel.name.toLowerCase();
+
+    // Only react to Ticket Tool ticket channels
+    if (!channelName.startsWith('ticket-')) return;
+
+    // Wait for Ticket Tool to finish creating the ticket
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Prevent duplicate welcome messages
+    const recentMessages = await channel.messages.fetch({ limit: 30 });
+
+    const alreadySent = recentMessages.some(msg =>
+      msg.author.id === client.user.id &&
+      msg.embeds.some(embed =>
+        embed.title === '🎫 WELCOME TO CASPER SHOP'
+      )
+    );
+
+    if (alreadySent) return;
+
+    // Try to detect the customer
+    const customer = await findTicketCustomer(channel);
+    const mention = customer ? `<@${customer.id}>` : '';
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor('#8B0000')
+      .setTitle('🎫 WELCOME TO CASPER SHOP')
+      .setDescription(
+        'Thank you for contacting **Casper Shop**. 👋\n\n' +
+        '📦 **How can we help?**\n' +
+        'Please tell us what you need and provide your order details if applicable.\n\n' +
+        '💳 **Payment**\n' +
+        'Please wait for a staff member before sending payment.\n\n' +
+        '⚡ **Fast Delivery**\n' +
+        'Once your payment is confirmed, your code will be delivered directly in this ticket.\n\n' +
+        '🛡️ **Security**\n' +
+        'Never share your Steam password or other sensitive information.\n\n' +
+        'A staff member will assist you shortly. ❤️'
+      )
+      .setFooter({
+        text: 'Casper Shop • Support'
+      })
+      .setTimestamp();
+
+    await channel.send({
+      ...(mention ? { content: mention } : {}),
+      embeds: [welcomeEmbed]
+    });
+
+    console.log(
+      `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${
+        customer?.user.tag || 'Not detected'
+      }`
+    );
+
+  } catch (error) {
+    console.error('Could not send ticket welcome:', error);
+  }
+});
+
+
 client.on('interactionCreate', async interaction => {
 
+  // =========================
   // /deliver
+  // =========================
+
   if (interaction.isChatInputCommand()) {
 
     if (interaction.commandName !== 'deliver') return;
@@ -165,7 +239,7 @@ client.on('interactionCreate', async interaction => {
       })
       .setTimestamp();
 
-    // Temporary button while the log is created
+    // Temporary button
     const temporaryButton = new ButtonBuilder()
       .setCustomId('delivery_loading')
       .setLabel('DONE')
@@ -182,6 +256,7 @@ client.on('interactionCreate', async interaction => {
     });
 
     try {
+
       // Delivery log
       const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
 
@@ -238,6 +313,11 @@ client.on('interactionCreate', async interaction => {
         embeds: [logEmbed]
       });
 
+
+      // =========================
+      // DELIVERY BUTTONS
+      // =========================
+
       // COPY CODE
       const copyButton = new ButtonBuilder()
         .setCustomId(`copy_code:${encodeURIComponent(code)}`)
@@ -261,7 +341,7 @@ client.on('interactionCreate', async interaction => {
           'https://discord.com/channels/939586775561695332/1396875023905591356'
         );
 
-      // 3 buttons
+      // Three buttons
       const row = new ActionRowBuilder()
         .addComponents(
           copyButton,
@@ -286,7 +366,11 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // Buttons
+
+  // =========================
+  // BUTTONS
+  // =========================
+
   if (interaction.isButton()) {
 
     // COPY CODE
@@ -307,6 +391,7 @@ client.on('interactionCreate', async interaction => {
 
       return;
     }
+
 
     // DONE
     if (interaction.customId.startsWith('delivery_done:')) {
@@ -337,10 +422,14 @@ client.on('interactionCreate', async interaction => {
         components: [row]
       });
 
+
       // Update delivery log
       try {
+
         const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
-        const logMessage = await logChannel.messages.fetch(logMessageId);
+
+        const logMessage =
+          await logChannel.messages.fetch(logMessageId);
 
         const oldLogEmbed = logMessage.embeds[0];
 
@@ -354,7 +443,8 @@ client.on('interactionCreate', async interaction => {
             inline: field.inline
           }));
 
-        const completedAt = Math.floor(Date.now() / 1000);
+        const completedAt =
+          Math.floor(Date.now() / 1000);
 
         const completedLogEmbed = new EmbedBuilder()
           .setColor('#2E7D32')
@@ -391,13 +481,21 @@ client.on('interactionCreate', async interaction => {
         );
 
       } catch (error) {
-        console.error('Could not update delivery log:', error);
+        console.error(
+          'Could not update delivery log:',
+          error
+        );
       }
 
       return;
     }
   }
 });
+
+
+// =========================
+// DISCORD LOGIN
+// =========================
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN
   ?.trim()
