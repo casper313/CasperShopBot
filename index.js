@@ -27,6 +27,7 @@ const RATINGS_FILE = path.join(__dirname, 'ratings.json');
 const CUSTOMERS_FILE = path.join(__dirname, 'customers.json');
 const COUPONS_FILE = path.join(__dirname, 'coupons.json');
 const TICKET_PRICES_FILE = path.join(__dirname, 'ticket-prices.json');
+const LOYALTY_FILE = path.join(__dirname, 'loyalty.json');
 
 // =========================
 // JSON FUNCTIONS
@@ -119,6 +120,115 @@ const coupons = readJson(
 const ticketPrices = readJson(
   TICKET_PRICES_FILE
 );
+
+const loyalty = readJson(
+  LOYALTY_FILE
+);
+
+// =========================
+// CASPER LOYALTY SYSTEM
+// =========================
+
+function getLoyalty(userId) {
+  if (!loyalty[userId]) {
+    loyalty[userId] = {
+      xp: 0,
+      orders: 0,
+      totalSpent: 0,
+      orderIds: [],
+      joinedAt: Date.now()
+    };
+  }
+
+  const data = loyalty[userId];
+  data.xp = Number(data.xp || 0);
+  data.orders = Number(data.orders || 0);
+  data.totalSpent = Number(data.totalSpent || 0);
+  data.orderIds = Array.isArray(data.orderIds) ? data.orderIds : [];
+  return data;
+}
+
+function getLoyaltyLevel(xp) {
+  const levels = [
+    { name: 'Bronze', emoji: '🥉', min: 0 },
+    { name: 'Silver', emoji: '🥈', min: 500 },
+    { name: 'Gold', emoji: '🥇', min: 1500 },
+    { name: 'Platinum', emoji: '💎', min: 3000 },
+    { name: 'VIP', emoji: '👑', min: 6000 }
+  ];
+
+  let current = levels[0];
+  for (const level of levels) {
+    if (xp >= level.min) current = level;
+  }
+
+  const index = levels.findIndex(level => level.name === current.name);
+  const next = levels[index + 1] || null;
+  return { current, next, levels };
+}
+
+function addLoyaltyOrder(userId, orderId, amount) {
+  if (!userId || !orderId) return null;
+
+  const data = getLoyalty(userId);
+  if (data.orderIds.includes(orderId)) return data;
+
+  const spent = Math.max(0, Number(amount) || 0);
+  const earnedXp = 100 + Math.floor(spent * 10);
+
+  data.xp += earnedXp;
+  data.orders += 1;
+  data.totalSpent += spent;
+  data.orderIds.push(orderId);
+  data.lastOrderAt = Date.now();
+  data.lastOrderId = orderId;
+
+  writeJson(LOYALTY_FILE, loyalty);
+  return data;
+}
+
+function loyaltyProfileEmbed(user) {
+  const data = getLoyalty(user.id);
+  const level = getLoyaltyLevel(data.xp);
+
+  let progressText = 'MAX LEVEL 👑';
+  if (level.next) {
+    const needed = level.next.min - data.xp;
+    const span = level.next.min - level.current.min;
+    const currentProgress = data.xp - level.current.min;
+    const blocks = Math.min(10, Math.max(0, Math.floor((currentProgress / span) * 10)));
+    progressText = `${'█'.repeat(blocks)}${'░'.repeat(10 - blocks)} ${currentProgress}/${span} XP\n` +
+      `Next: ${level.next.emoji} **${level.next.name}** • ${needed} XP remaining`;
+  }
+
+  return new EmbedBuilder()
+    .setColor('#8B0000')
+    .setTitle('👤 CASPER SHOP — CUSTOMER PROFILE')
+    .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+    .setDescription(
+      `Welcome back, **${user.username}**! ❤️\n\n` +
+      `${level.current.emoji} **${level.current.name} LEVEL**\n` +
+      `⭐ **${data.xp.toLocaleString()} XP**\n\n` +
+      `**Level Progress**\n${progressText}`
+    )
+    .addFields(
+      { name: '🛒 Orders', value: `**${data.orders}**`, inline: true },
+      { name: '💰 Total Spent', value: `$${data.totalSpent.toFixed(2)}`, inline: true },
+      { name: '🏆 Status', value: `${level.current.emoji} ${level.current.name}`, inline: true }
+    )
+    .setFooter({ text: 'Casper Shop • Loyalty System' })
+    .setTimestamp();
+}
+
+function loyaltyProfileButton() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('loyalty_profile')
+      .setLabel('MY CASPER PROFILE')
+      .setEmoji('👤')
+      .setStyle(ButtonStyle.Primary)
+  );
+}
 
 // =========================
 // LANGUAGES
@@ -901,6 +1011,11 @@ const couponListCommand =
     .setName('coupon-list')
     .setDescription('List all coupons');
 
+const profileCommand =
+  new SlashCommandBuilder()
+    .setName('profile')
+    .setDescription('View your Casper Shop loyalty profile');
+
 const languageCommand =
   new SlashCommandBuilder()
 
@@ -921,6 +1036,8 @@ const commands = [
   couponDeleteCommand,
 
   couponListCommand,
+
+  profileCommand,
 
   languageCommand
 
@@ -1272,6 +1389,17 @@ client.on(
               ephemeral: true
             });
           }
+        }
+
+        // =========================
+        // /profile
+        // =========================
+
+        if (interaction.commandName === 'profile') {
+          return interaction.reply({
+            embeds: [loyaltyProfileEmbed(interaction.user)],
+            components: [loyaltyProfileButton()]
+          });
         }
 
         // =========================
@@ -1757,7 +1885,8 @@ client.on(
               ],
 
               components: [
-                couponButtons()
+                couponButtons(),
+                loyaltyProfileButton()
               ]
 
             });
@@ -1797,6 +1926,25 @@ client.on(
           );
 
           return;
+        }
+
+        // =========================
+        // MY CASPER PROFILE
+        // =========================
+
+        if (interaction.customId === 'loyalty_profile') {
+          const customer = await findTicketCustomer(interaction.channel);
+          if (customer && customer.id !== interaction.user.id) {
+            return interaction.reply({
+              content: '❌ Only the customer who opened this ticket can view this profile button.',
+              ephemeral: true
+            });
+          }
+
+          return interaction.reply({
+            embeds: [loyaltyProfileEmbed(interaction.user)],
+            ephemeral: true
+          });
         }
 
         // =========================
@@ -1913,6 +2061,19 @@ client.on(
           const customer = await findTicketCustomer(interaction.channel);
           if (!customer || customer.id !== interaction.user.id) {
             return interaction.reply({ content: '❌ Only the customer who opened this ticket can remove the coupon.', ephemeral: true });
+          }
+
+          // If a coupon was applied, return its usage when the customer removes it.
+          const removedCouponCode = normalizeCouponCode(data.couponCode);
+          if (removedCouponCode && coupons[removedCouponCode]) {
+            coupons[removedCouponCode].used = Math.max(
+              0,
+              Number(coupons[removedCouponCode].used || 0) - 1
+            );
+            coupons[removedCouponCode].lastUsedAt = null;
+            coupons[removedCouponCode].lastUsedBy = null;
+            coupons[removedCouponCode].lastUsedTicket = null;
+            writeJson(COUPONS_FILE, coupons);
           }
 
           data.finalPrice = Number(data.basePrice);
@@ -2229,6 +2390,16 @@ client.on(
 
           const t =
             LANGUAGES[lang];
+
+          // =========================
+          // LOYALTY REWARD
+          // =========================
+          // Count the order only once when DONE is clicked.
+          if (customer) {
+            const ticketData = ticketPrices[interaction.channel.id];
+            const finalAmount = ticketData ? Number(ticketData.finalPrice ?? ticketData.basePrice ?? 0) : 0;
+            addLoyaltyOrder(customer.id, orderId, finalAmount);
+          }
 
           const completedEmbed =
             new EmbedBuilder(
