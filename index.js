@@ -150,11 +150,11 @@ function getLoyalty(userId) {
 
 function getLoyaltyLevel(xp) {
   const levels = [
-    { name: 'Bronze', emoji: '🥉', min: 0 },
+    { name: 'Bronze', emoji: '🥉', min: 100 },
     { name: 'Silver', emoji: '🥈', min: 500 },
     { name: 'Gold', emoji: '🥇', min: 1500 },
-    { name: 'Platinum', emoji: '💎', min: 3000 },
-    { name: 'VIP', emoji: '👑', min: 6000 }
+    { name: 'Platinum', emoji: '💎', min: 4000 },
+    { name: 'VIP', emoji: '👑', min: 10000 }
   ];
 
   let current = levels[0];
@@ -174,7 +174,7 @@ function addLoyaltyOrder(userId, orderId, amount) {
   if (data.orderIds.includes(orderId)) return data;
 
   const spent = Math.max(0, Number(amount) || 0);
-  const earnedXp = 100 + Math.floor(spent * 10);
+  const earnedXp = Math.floor(spent);
 
   data.xp += earnedXp;
   data.orders += 1;
