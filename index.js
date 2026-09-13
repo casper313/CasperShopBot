@@ -121,50 +121,6 @@ const ticketPrices = readJson(
 );
 
 // =========================
-// COUPON SYSTEM
-// =========================
-
-function normalizeCoupon(code) {
-  return String(code || '').trim().toUpperCase();
-}
-
-function getTicketPrice(channelId) {
-  return Number(ticketPrices[channelId]?.price || 0);
-}
-
-function getTicketCoupon(channelId) {
-  return ticketPrices[channelId]?.coupon || null;
-}
-
-function calculateFinalPrice(channelId) {
-  const price = getTicketPrice(channelId);
-  const couponCode = getTicketCoupon(channelId);
-  if (!price || !couponCode || !coupons[couponCode]) {
-    return { price, discount: 0, final: price, couponCode: null };
-  }
-  const coupon = coupons[couponCode];
-  const discount = Math.min(price, price * (Number(coupon.discount) / 100));
-  return { price, discount, final: Math.max(0, price - discount), couponCode };
-}
-
-function couponIsValid(code) {
-  const coupon = coupons[normalizeCoupon(code)];
-  if (!coupon) return { ok: false, reason: '❌ Invalid coupon code.' };
-  if (coupon.enabled === false) return { ok: false, reason: '❌ This coupon is disabled.' };
-  if (coupon.maxUses > 0 && coupon.uses >= coupon.maxUses) return { ok: false, reason: '❌ This coupon has reached its maximum uses.' };
-  if (coupon.expiresAt && Date.now() >= coupon.expiresAt) return { ok: false, reason: '❌ This coupon has expired.' };
-  return { ok: true, coupon };
-}
-
-function saveTicketPrice(channelId, data) {
-  ticketPrices[channelId] = {
-    ...(ticketPrices[channelId] || {}),
-    ...data
-  };
-  writeJson(TICKET_PRICES_FILE, ticketPrices);
-}
-
-// =========================
 // LANGUAGES
 // =========================
 
@@ -601,21 +557,6 @@ function languageEmbed(lang) {
 // WELCOME EMBED
 // =========================
 
-function couponButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('apply_coupon')
-      .setLabel('APPLY COUPON')
-      .setEmoji('🎟️')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('remove_coupon')
-      .setLabel('REMOVE COUPON')
-      .setEmoji('🗑️')
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
-
 function buildWelcomeEmbed(lang) {
 
   const t =
@@ -676,6 +617,140 @@ async function findTicketCustomer(channel) {
   }
 
   return null;
+}
+
+// =========================
+// COUPON SYSTEM
+// =========================
+
+function normalizeCouponCode(code) {
+  return String(code || '').trim().toUpperCase();
+}
+
+// Always reload coupons from disk before checking them.
+// This prevents an old in-memory coupon list from causing
+// "Invalid coupon code" when coupons.json was updated by
+// another bot process, hosting restart, or external edit.
+function refreshCoupons() {
+  const latestCoupons = readJson(COUPONS_FILE, {});
+
+  for (const key of Object.keys(coupons)) {
+    delete coupons[key];
+  }
+
+  Object.assign(coupons, latestCoupons);
+
+  return coupons;
+}
+
+function couponResult(ticketId) {
+  return ticketPrices[ticketId] || null;
+}
+
+function calculateCouponPrice(basePrice, coupon) {
+  if (!coupon) return Number(basePrice);
+
+  if (coupon.type === 'fixed') {
+    return Math.max(0, Number(basePrice) - Number(coupon.value));
+  }
+
+  return Math.max(
+    0,
+    Number(basePrice) - (Number(basePrice) * Number(coupon.value) / 100)
+  );
+}
+
+function isCouponValid(code) {
+  refreshCoupons();
+
+  const normalizedCode = normalizeCouponCode(code);
+  const coupon = coupons[normalizedCode];
+
+  if (!coupon) {
+    return { ok: false, reason: 'not_found' };
+  }
+
+  if (coupon.enabled === false) {
+    return { ok: false, reason: 'disabled', coupon };
+  }
+
+  if (coupon.expiresAt && Date.now() >= Number(coupon.expiresAt)) {
+    return { ok: false, reason: 'expired', coupon };
+  }
+
+  if (Number(coupon.maxUses) > 0 && Number(coupon.used) >= Number(coupon.maxUses)) {
+    return { ok: false, reason: 'limit', coupon };
+  }
+
+  return { ok: true, coupon };
+}
+
+function couponPriceEmbed(lang, ticketId) {
+  const data = ticketPrices[ticketId];
+  const t = LANGUAGES[lang] || LANGUAGES.en;
+
+  if (!data) return null;
+
+  const base = Number(data.basePrice);
+  const finalPrice = Number(data.finalPrice ?? base);
+  const discount = Number(data.discountAmount || 0);
+
+  let description =
+    `**Original Price:** $${base.toFixed(2)}\n` +
+    `**Final Price:** $${finalPrice.toFixed(2)}`;
+
+  if (data.couponCode) {
+    description +=
+      `\n\n🎟️ **Coupon:** \`${data.couponCode}\`\n` +
+      `💸 **Discount:** $${discount.toFixed(2)}`;
+  }
+
+  return new EmbedBuilder()
+    .setColor('#8B0000')
+    .setTitle('💰 CASPER SHOP — PRICE')
+    .setDescription(description)
+    .setFooter({ text: 'Casper Shop • Coupon System' })
+    .setTimestamp();
+}
+
+function couponButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('coupon_apply')
+      .setLabel('APPLY COUPON')
+      .setEmoji('🎟️')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('coupon_remove')
+      .setLabel('REMOVE COUPON')
+      .setEmoji('🗑️')
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function couponErrorText(lang, reason) {
+  const texts = {
+    en: {
+      not_found: '❌ Invalid coupon code.',
+      disabled: '❌ This coupon is disabled.',
+      expired: '❌ This coupon has expired.',
+      limit: '❌ This coupon has reached its usage limit.'
+    },
+    ar: {
+      not_found: '❌ كود الكوبون غير صالح.',
+      disabled: '❌ هذا الكوبون متوقف.',
+      expired: '❌ انتهت صلاحية هذا الكوبون.',
+      limit: '❌ تم الوصول إلى الحد الأقصى لاستخدام هذا الكوبون.'
+    },
+    zh: {
+      not_found: '❌ 优惠码无效。',
+      disabled: '❌ 此优惠码已停用。',
+      expired: '❌ 此优惠码已过期。',
+      limit: '❌ 此优惠码已达到使用次数上限。'
+    }
+  };
+
+  return texts[lang]?.[reason] || texts.en[reason] || texts.en.not_found;
 }
 
 // =========================
@@ -784,6 +859,48 @@ const deliverCommand =
           .setRequired(true)
     );
 
+const priceCommand =
+  new SlashCommandBuilder()
+    .setName('price')
+    .setDescription('Set the current ticket price and show the coupon button')
+    .addNumberOption(option =>
+      option
+        .setName('amount')
+        .setDescription('Price in USD')
+        .setMinValue(0)
+        .setRequired(true)
+    );
+
+const couponCreateCommand =
+  new SlashCommandBuilder()
+    .setName('coupon-create')
+    .setDescription('Create a coupon')
+    .addStringOption(option =>
+      option.setName('code').setDescription('Coupon code').setRequired(true)
+    )
+    .addNumberOption(option =>
+      option.setName('discount').setDescription('Discount percentage (0-100)').setMinValue(0.01).setMaxValue(100).setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option.setName('max-uses').setDescription('Maximum uses, 0 = unlimited').setMinValue(0).setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option.setName('days').setDescription('Expires after this many days, 0 = never').setMinValue(0).setRequired(true)
+    );
+
+const couponDeleteCommand =
+  new SlashCommandBuilder()
+    .setName('coupon-delete')
+    .setDescription('Delete a coupon')
+    .addStringOption(option =>
+      option.setName('code').setDescription('Coupon code').setRequired(true)
+    );
+
+const couponListCommand =
+  new SlashCommandBuilder()
+    .setName('coupon-list')
+    .setDescription('List all coupons');
+
 const languageCommand =
   new SlashCommandBuilder()
 
@@ -793,42 +910,11 @@ const languageCommand =
       'Choose your Casper Shop language'
     );
 
-
-const couponCreateCommand =
-  new SlashCommandBuilder()
-    .setName('coupon-create')
-    .setDescription('Create a Casper Shop coupon')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages.toString())
-    .addStringOption(o => o.setName('code').setDescription('Coupon code').setRequired(true))
-    .addNumberOption(o => o.setName('discount').setDescription('Discount percentage, e.g. 10').setMinValue(1).setMaxValue(100).setRequired(true))
-    .addIntegerOption(o => o.setName('max-uses').setDescription('Maximum uses; 0 = unlimited').setMinValue(0).setRequired(true))
-    .addIntegerOption(o => o.setName('days').setDescription('Validity in days; 0 = never expires').setMinValue(0).setRequired(true));
-
-const couponDeleteCommand =
-  new SlashCommandBuilder()
-    .setName('coupon-delete')
-    .setDescription('Delete a Casper Shop coupon')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages.toString())
-    .addStringOption(o => o.setName('code').setDescription('Coupon code').setRequired(true));
-
-const couponListCommand =
-  new SlashCommandBuilder()
-    .setName('coupon-list')
-    .setDescription('List Casper Shop coupons')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages.toString());
-
-const priceCommand =
-  new SlashCommandBuilder()
-    .setName('price')
-    .setDescription('Set the ticket price and show coupon controls')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages.toString())
-    .addNumberOption(o => o.setName('amount').setDescription('Original price in USD').setMinValue(0).setRequired(true));
-
 const commands = [
 
   deliverCommand,
 
-  languageCommand,
+  priceCommand,
 
   couponCreateCommand,
 
@@ -836,7 +922,7 @@ const commands = [
 
   couponListCommand,
 
-  priceCommand
+  languageCommand
 
 ];
 
@@ -1058,6 +1144,137 @@ client.on(
       ) {
 
         // =========================
+        // COUPON / PRICE COMMANDS
+        // =========================
+
+        if (
+          ['price', 'coupon-create', 'coupon-delete', 'coupon-list'].includes(
+            interaction.commandName
+          )
+        ) {
+          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            return interaction.reply({
+              content: '❌ You do not have permission to use this command.',
+              ephemeral: true
+            });
+          }
+
+          if (!interaction.channel?.name?.toLowerCase().startsWith('ticket-') && interaction.commandName === 'price') {
+            return interaction.reply({
+              content: '❌ `/price` can only be used inside a ticket.',
+              ephemeral: true
+            });
+          }
+
+          if (interaction.commandName === 'price') {
+            const amount = interaction.options.getNumber('amount', true);
+            const ticketId = interaction.channel.id;
+
+            ticketPrices[ticketId] = {
+              basePrice: Number(amount),
+              finalPrice: Number(amount),
+              discountAmount: 0,
+              couponCode: null,
+              priceMessageId: null,
+              updatedAt: Date.now()
+            };
+
+            writeJson(TICKET_PRICES_FILE, ticketPrices);
+
+            const customer = await findTicketCustomer(interaction.channel);
+            const lang = customer ? getLanguage(customer.id) : 'en';
+
+            const priceMessage = await interaction.reply({
+              content: '💰 Price set successfully.',
+              embeds: [couponPriceEmbed(lang, ticketId)],
+              components: [couponButtons()],
+              fetchReply: true
+            });
+
+            ticketPrices[ticketId].priceMessageId = priceMessage.id;
+            writeJson(TICKET_PRICES_FILE, ticketPrices);
+            return;
+          }
+
+          if (interaction.commandName === 'coupon-create') {
+            refreshCoupons();
+
+            const code = normalizeCouponCode(interaction.options.getString('code', true));
+            const discount = interaction.options.getNumber('discount', true);
+            const maxUses = interaction.options.getInteger('max-uses', true);
+            const days = interaction.options.getInteger('days', true);
+
+            if (!/^[A-Z0-9_-]{2,32}$/.test(code)) {
+              return interaction.reply({ content: '❌ Coupon code must be 2-32 characters and use only A-Z, 0-9, `_` or `-`.', ephemeral: true });
+            }
+
+            if (coupons[code]) {
+              return interaction.reply({ content: '❌ This coupon already exists.', ephemeral: true });
+            }
+
+            coupons[code] = {
+              type: 'percent',
+              value: Number(discount),
+              maxUses: Number(maxUses),
+              used: 0,
+              enabled: true,
+              createdBy: interaction.user.id,
+              createdAt: Date.now(),
+              expiresAt: days > 0 ? Date.now() + days * 86400000 : null
+            };
+
+            writeJson(COUPONS_FILE, coupons);
+
+            return interaction.reply({
+              content:
+                `✅ Coupon created successfully.\n\n` +
+                `🎟️ Code: **${code}**\n` +
+                `💸 Discount: **${discount}%**\n` +
+                `🔢 Max Uses: **${maxUses === 0 ? 'Unlimited' : maxUses}**\n` +
+                `⏰ Expiry: **${days === 0 ? 'Never' : `${days} day(s)`}**`,
+              ephemeral: true
+            });
+          }
+
+          if (interaction.commandName === 'coupon-delete') {
+            refreshCoupons();
+
+            const code = normalizeCouponCode(interaction.options.getString('code', true));
+
+            if (!coupons[code]) {
+              return interaction.reply({ content: '❌ Coupon not found.', ephemeral: true });
+            }
+
+            delete coupons[code];
+            writeJson(COUPONS_FILE, coupons);
+
+            return interaction.reply({ content: `✅ Coupon **${code}** deleted.`, ephemeral: true });
+          }
+
+          if (interaction.commandName === 'coupon-list') {
+            refreshCoupons();
+
+            const entries = Object.entries(coupons);
+
+            if (!entries.length) {
+              return interaction.reply({ content: '🎟️ No coupons created yet.', ephemeral: true });
+            }
+
+            const lines = entries.map(([code, coupon]) => {
+              const expiry = coupon.expiresAt ? `<t:${Math.floor(Number(coupon.expiresAt) / 1000)}:R>` : 'Never';
+              const uses = Number(coupon.maxUses) > 0 ? `${coupon.used}/${coupon.maxUses}` : `${coupon.used}/∞`;
+              const status = coupon.enabled === false ? '🔴 Disabled' : '🟢 Active';
+              return `**${code}** — ${coupon.value}% off — ${uses} — ${expiry} — ${status}`;
+            });
+
+            return interaction.reply({
+              content: `🎟️ **Casper Shop Coupons**\n\n${lines.join('\n')}`,
+              ephemeral: true
+            });
+          }
+        }
+
+        // =========================
         // /language
         // =========================
 
@@ -1091,66 +1308,6 @@ client.on(
 
           });
 
-        }
-
-        // =========================
-        // COUPON COMMANDS
-        // =========================
-
-        if (interaction.commandName === 'coupon-create') {
-          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You do not have permission to manage coupons.', ephemeral: true });
-          }
-          const code = normalizeCoupon(interaction.options.getString('code', true));
-          const discount = interaction.options.getNumber('discount', true);
-          const maxUses = interaction.options.getInteger('max-uses', true);
-          const days = interaction.options.getInteger('days', true);
-          if (coupons[code]) {
-            return interaction.reply({ content: `❌ Coupon **${code}** already exists.`, ephemeral: true });
-          }
-          coupons[code] = { discount, maxUses, uses: 0, enabled: true, createdAt: Date.now(), expiresAt: days > 0 ? Date.now() + days * 86400000 : null };
-          writeJson(COUPONS_FILE, coupons);
-          return interaction.reply({ content: `✅ Coupon created successfully.\n\n🎟️ Code: **${code}**\n💸 Discount: **${discount}%**\n🔢 Max Uses: **${maxUses === 0 ? 'Unlimited' : maxUses}**\n⏰ Expiry: **${days === 0 ? 'Never' : `${days} day(s)`}**`, ephemeral: true });
-        }
-
-        if (interaction.commandName === 'coupon-delete') {
-          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You do not have permission to manage coupons.', ephemeral: true });
-          }
-          const code = normalizeCoupon(interaction.options.getString('code', true));
-          if (!coupons[code]) return interaction.reply({ content: '❌ Coupon not found.', ephemeral: true });
-          delete coupons[code];
-          writeJson(COUPONS_FILE, coupons);
-          return interaction.reply({ content: `✅ Coupon **${code}** deleted.`, ephemeral: true });
-        }
-
-        if (interaction.commandName === 'coupon-list') {
-          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You do not have permission to view coupons.', ephemeral: true });
-          }
-          const entries = Object.entries(coupons);
-          if (!entries.length) return interaction.reply({ content: '📭 No coupons created yet.', ephemeral: true });
-          const text = entries.map(([code, c]) => {
-            const expiry = c.expiresAt ? `<t:${Math.floor(c.expiresAt / 1000)}:R>` : 'Never';
-            const uses = c.maxUses === 0 ? `${c.uses}/∞` : `${c.uses}/${c.maxUses}`;
-            return `🎟️ **${code}** — ${c.discount}% — Uses: ${uses} — Expires: ${expiry}`;
-          }).join('\n');
-          return interaction.reply({ content: `**🎟️ Casper Shop Coupons**\n\n${text}`, ephemeral: true });
-        }
-
-        if (interaction.commandName === 'price') {
-          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-            return interaction.reply({ content: '❌ You do not have permission to set prices.', ephemeral: true });
-          }
-          if (!interaction.channel?.name?.toLowerCase().startsWith('ticket-')) {
-            return interaction.reply({ content: '❌ Use `/price` inside a ticket.', ephemeral: true });
-          }
-          const amount = interaction.options.getNumber('amount', true);
-          saveTicketPrice(interaction.channel.id, { price: amount });
-          const calc = calculateFinalPrice(interaction.channel.id);
-          const couponLine = calc.couponCode ? `\n🎟️ Coupon: **${calc.couponCode}** (-$${calc.discount.toFixed(2)})` : '';
-          await interaction.reply({ content: `💰 **Ticket Price**\n\nOriginal: **$${calc.price.toFixed(2)}**${couponLine}\nFinal Price: **$${calc.final.toFixed(2)}**`, components: [couponButtons()] });
-          return;
         }
 
         // =========================
@@ -1495,24 +1652,6 @@ client.on(
       }
 
       // =========================
-      // MODALS
-      // =========================
-
-      if (interaction.isModalSubmit() && interaction.customId.startsWith('coupon_modal:')) {
-        const channelId = interaction.customId.split(':')[1];
-        if (interaction.channelId !== channelId) return interaction.reply({ content: '❌ Invalid ticket.', ephemeral: true });
-        const code = normalizeCoupon(interaction.fields.getTextInputValue('coupon_code'));
-        const check = couponIsValid(code);
-        if (!check.ok) return interaction.reply({ content: check.reason, ephemeral: true });
-        saveTicketPrice(channelId, { coupon: code });
-        const calc = calculateFinalPrice(channelId);
-        const priceText = calc.price > 0 ? `\n\n💰 Original: **$${calc.price.toFixed(2)}**\n💸 Discount: **-$${calc.discount.toFixed(2)}**\n✅ Final: **$${calc.final.toFixed(2)}**` : '\n\nℹ️ Coupon saved. Staff can set the ticket price with `/price`.';
-        coupons[code].uses += 1;
-        writeJson(COUPONS_FILE, coupons);
-        return interaction.reply({ content: `🎟️ **Coupon Applied Successfully!**\n\nCode: **${code}**\nDiscount: **${check.coupon.discount}%**${priceText}`, ephemeral: true });
-      }
-
-      // =========================
       // BUTTONS
       // =========================
 
@@ -1617,9 +1756,7 @@ client.on(
                 welcomeEmbed
               ],
 
-              components: [
-                couponButtons()
-              ]
+              components: []
 
             });
 
@@ -1658,29 +1795,6 @@ client.on(
           );
 
           return;
-        }
-
-        // =========================
-        // COUPON BUTTONS
-        // =========================
-
-        if (interaction.customId === 'apply_coupon') {
-          if (!interaction.channel?.name?.toLowerCase().startsWith('ticket-')) {
-            return interaction.reply({ content: '❌ This button can only be used inside a ticket.', ephemeral: true });
-          }
-          const modal = new ModalBuilder().setCustomId(`coupon_modal:${interaction.channel.id}`).setTitle('Apply Coupon');
-          const input = new TextInputBuilder().setCustomId('coupon_code').setLabel('Coupon Code').setPlaceholder('CASPER10').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
-          modal.addComponents(new ActionRowBuilder().addComponents(input));
-          return interaction.showModal(modal);
-        }
-
-        if (interaction.customId === 'remove_coupon') {
-          if (!interaction.channel?.name?.toLowerCase().startsWith('ticket-')) return interaction.reply({ content: '❌ Use this inside a ticket.', ephemeral: true });
-          const existing = getTicketCoupon(interaction.channel.id);
-          if (!existing) return interaction.reply({ content: 'ℹ️ No coupon is currently applied.', ephemeral: true });
-          saveTicketPrice(interaction.channel.id, { coupon: null });
-          const calc = calculateFinalPrice(interaction.channel.id);
-          return interaction.reply({ content: `🗑️ Coupon **${existing}** removed.\n💰 Final Price: **$${calc.final.toFixed(2)}**`, ephemeral: true });
         }
 
         // =========================
@@ -1743,6 +1857,75 @@ client.on(
           });
 
           return;
+        }
+
+        // =========================
+        // APPLY COUPON
+        // =========================
+
+        if (interaction.customId === 'coupon_apply') {
+          const ticketId = interaction.channel.id;
+          const data = ticketPrices[ticketId];
+
+          if (!data) {
+            return interaction.reply({ content: '❌ No ticket price has been set yet.', ephemeral: true });
+          }
+
+          const customer = await findTicketCustomer(interaction.channel);
+          if (!customer || customer.id !== interaction.user.id) {
+            return interaction.reply({ content: '❌ Only the customer who opened this ticket can apply a coupon.', ephemeral: true });
+          }
+
+          if (data.couponCode) {
+            return interaction.reply({ content: `❌ A coupon (\`${data.couponCode}\`) is already applied to this ticket. Remove it first.`, ephemeral: true });
+          }
+
+          const modal = new ModalBuilder()
+            .setCustomId(`coupon_modal:${ticketId}`)
+            .setTitle('🎟️ Apply Coupon');
+
+          const input = new TextInputBuilder()
+            .setCustomId('coupon_code')
+            .setLabel('Coupon Code')
+            .setPlaceholder('Example: CASPER10')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(32);
+
+          modal.addComponents(new ActionRowBuilder().addComponents(input));
+          return interaction.showModal(modal);
+        }
+
+        // =========================
+        // REMOVE COUPON
+        // =========================
+
+        if (interaction.customId === 'coupon_remove') {
+          const ticketId = interaction.channel.id;
+          const data = ticketPrices[ticketId];
+
+          if (!data) {
+            return interaction.reply({ content: '❌ No ticket price has been set yet.', ephemeral: true });
+          }
+
+          const customer = await findTicketCustomer(interaction.channel);
+          if (!customer || customer.id !== interaction.user.id) {
+            return interaction.reply({ content: '❌ Only the customer who opened this ticket can remove the coupon.', ephemeral: true });
+          }
+
+          data.finalPrice = Number(data.basePrice);
+          data.discountAmount = 0;
+          data.couponCode = null;
+          data.couponAppliedBy = null;
+          data.updatedAt = Date.now();
+          writeJson(TICKET_PRICES_FILE, ticketPrices);
+
+          const lang = getLanguage(interaction.user.id);
+          return interaction.update({
+            content: '🗑️ Coupon removed.',
+            embeds: [couponPriceEmbed(lang, ticketId)],
+            components: [couponButtons()]
+          });
         }
 
         // =========================
@@ -2304,6 +2487,91 @@ client.on(
 
           return;
         }
+      }
+
+      // =========================
+      // COUPON MODAL
+      // =========================
+
+      if (
+        interaction.isModalSubmit() &&
+        interaction.customId.startsWith('coupon_modal:')
+      ) {
+        const ticketId = interaction.customId.substring('coupon_modal:'.length);
+        const data = ticketPrices[ticketId];
+
+        if (!data || interaction.channel.id !== ticketId) {
+          return interaction.reply({ content: '❌ This coupon request is no longer valid.', ephemeral: true });
+        }
+
+        if (data.couponCode) {
+          return interaction.reply({ content: `❌ A coupon (\`${data.couponCode}\`) is already applied to this ticket.`, ephemeral: true });
+        }
+
+        const customer = await findTicketCustomer(interaction.channel);
+        if (!customer || customer.id !== interaction.user.id) {
+          return interaction.reply({ content: '❌ Only the customer who opened this ticket can apply a coupon.', ephemeral: true });
+        }
+
+        const code = normalizeCouponCode(
+          interaction.fields.getTextInputValue('coupon_code')
+        );
+
+        // Reload coupons.json so the newest coupon is always checked.
+        refreshCoupons();
+
+        const validation = isCouponValid(code);
+        const lang = getLanguage(interaction.user.id);
+
+        if (!validation.ok) {
+          return interaction.reply({
+            content: couponErrorText(lang, validation.reason),
+            ephemeral: true
+          });
+        }
+
+        const coupon = validation.coupon;
+        const basePrice = Number(data.basePrice);
+        const finalPrice = calculateCouponPrice(basePrice, coupon);
+        const discountAmount = basePrice - finalPrice;
+
+        data.finalPrice = finalPrice;
+        data.discountAmount = discountAmount;
+        data.couponCode = code;
+        data.couponAppliedBy = interaction.user.id;
+        data.updatedAt = Date.now();
+
+        coupon.used = Number(coupon.used || 0) + 1;
+        coupon.lastUsedAt = Date.now();
+        coupon.lastUsedBy = interaction.user.id;
+        coupon.lastUsedTicket = ticketId;
+
+        writeJson(TICKET_PRICES_FILE, ticketPrices);
+        writeJson(COUPONS_FILE, coupons);
+
+        if (data.priceMessageId) {
+          try {
+            const priceMessage = await interaction.channel.messages.fetch(data.priceMessageId);
+            await priceMessage.edit({
+              content: '💰 Price updated with coupon.',
+              embeds: [couponPriceEmbed(lang, ticketId)],
+              components: [couponButtons()]
+            });
+          } catch (error) {
+            console.error('Could not update coupon price message:', error);
+          }
+        }
+
+        await interaction.reply({
+          content:
+            `✅ **Coupon applied!**\n` +
+            `🎟️ Code: **${code}**\n` +
+            `💸 Discount: **${coupon.value}%**\n` +
+            `💰 Final Price: **$${finalPrice.toFixed(2)}**`,
+          ephemeral: true
+        });
+
+        return;
       }
 
       // =========================
