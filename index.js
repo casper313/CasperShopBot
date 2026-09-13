@@ -1756,7 +1756,9 @@ client.on(
                 welcomeEmbed
               ],
 
-              components: []
+              components: [
+                couponButtons()
+              ]
 
             });
 
