@@ -891,44 +891,12 @@ client.on(
       const userId =
         customer.id;
 
-      const savedLanguage =
-        customers[userId];
-
       // =========================
-      // NEW CUSTOMER
+      // ALWAYS ASK LANGUAGE
       // =========================
-
-      if (
-        !LANGUAGES[savedLanguage]
-      ) {
-
-        await channel.send({
-
-          content:
-            `<@${userId}>`,
-
-          embeds: [
-            languageEmbed('en')
-          ],
-
-          components: [
-            languageButtons(
-              userId
-            )
-          ]
-
-        });
-
-        console.log(
-          `Language selection sent | Ticket: ${channel.name} | Customer: ${customer.user.tag}`
-        );
-
-        return;
-      }
-
-      // =========================
-      // RETURNING CUSTOMER
-      // =========================
+      // Language is selected separately for every ticket.
+      // We still save the customer's last choice for records,
+      // but it is NOT automatically reused for a new ticket.
 
       await channel.send({
 
@@ -936,17 +904,19 @@ client.on(
           `<@${userId}>`,
 
         embeds: [
-          buildWelcomeEmbed(
-            savedLanguage
+          languageEmbed('en')
+        ],
+
+        components: [
+          languageButtons(
+            userId
           )
         ]
 
       });
 
       console.log(
-
-        `Ticket welcome sent | Ticket: ${channel.name} | Customer: ${customer.user.tag} | Language: ${savedLanguage}`
-
+        `Language selection sent | Ticket: ${channel.name} | Customer: ${customer.user.tag}`
       );
 
     } catch (error) {
