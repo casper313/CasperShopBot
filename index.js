@@ -28,6 +28,7 @@ const CUSTOMERS_FILE = path.join(__dirname, 'customers.json');
 const COUPONS_FILE = path.join(__dirname, 'coupons.json');
 const TICKET_PRICES_FILE = path.join(__dirname, 'ticket-prices.json');
 const LOYALTY_FILE = path.join(__dirname, 'loyalty.json');
+const SPIN_FILE = path.join(__dirname, 'spin-data.json');
 
 // =========================
 // JSON FUNCTIONS
@@ -229,6 +230,98 @@ function loyaltyProfileButton() {
       .setStyle(ButtonStyle.Primary)
   );
 }
+
+// =========================
+// CASPER DAILY SPIN
+// =========================
+
+const spinData = readJson(SPIN_FILE, {
+  channelId: null,
+  resultChannelId: null,
+  users: {}
+});
+if (!Object.prototype.hasOwnProperty.call(spinData, 'resultChannelId')) spinData.resultChannelId = null;
+
+function saveSpinData() {
+  writeJson(SPIN_FILE, spinData);
+}
+
+function spinPanelEmbed() {
+  return new EmbedBuilder()
+    .setColor('#8B0000')
+    .setTitle('🎰 CASPER DAILY SPIN')
+    .setDescription(
+      '**Spin once every 24 hours!** 🍀\n\n' +
+      '🎟️ **3% OFF** — Rare\n' +
+      '🎟️ **5% OFF** — Extremely Rare\n' +
+      '⭐ **+5 XP** — Uncommon\n' +
+      '💎 **+10 XP** — Rare\n' +
+      '😈 **No Reward** — Better luck next time!\n\n' +
+      '**Your reward is completely random.**\n' +
+      'One spin per customer every **24 hours**.'
+    )
+    .setFooter({ text: 'Casper Shop • Daily Spin' })
+    .setTimestamp();
+}
+
+function spinButtonRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('daily_spin')
+      .setLabel('SPIN NOW')
+      .setEmoji('🎰')
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+function getSpinReward() {
+  const roll = Math.random() * 100;
+
+  if (roll < 1) return { type: 'coupon', discount: 5 };
+  if (roll < 6) return { type: 'coupon', discount: 3 };
+  if (roll < 10) return { type: 'xp', xp: 10 };
+  if (roll < 20) return { type: 'xp', xp: 5 };
+  return { type: 'none' };
+}
+
+function createSpinCoupon(discount, userId) {
+  refreshCoupons();
+
+  let code;
+  do {
+    code = `SPIN${discount}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  } while (coupons[code]);
+
+  coupons[code] = {
+    type: 'percent',
+    value: Number(discount),
+    maxUses: 1,
+    used: 0,
+    enabled: true,
+    createdBy: 'DAILY_SPIN',
+    createdFor: userId,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000
+  };
+
+  writeJson(COUPONS_FILE, coupons);
+  return code;
+}
+
+function spinCooldown(userId) {
+  const last = Number(spinData.users?.[userId]?.lastSpinAt || 0);
+  const remaining = 24 * 60 * 60 * 1000 - (Date.now() - last);
+  return Math.max(0, remaining);
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}
+
 
 // =========================
 // LANGUAGES
@@ -1016,6 +1109,37 @@ const profileCommand =
     .setName('profile')
     .setDescription('View your Casper Shop loyalty profile');
 
+const spinSetupCommand =
+  new SlashCommandBuilder()
+    .setName('spin-setup')
+    .setDescription('Set up the Daily Spin in the current channel');
+
+const spinCommand =
+  new SlashCommandBuilder()
+    .setName('spin')
+    .setDescription('Open the Daily Spin');
+
+const spinResultSetupCommand =
+  new SlashCommandBuilder()
+    .setName('spin-result-setup')
+    .setDescription('Set the current channel as the Daily Spin result channel');
+
+const spinResetCommand =
+  new SlashCommandBuilder()
+    .setName('spin-reset')
+    .setDescription('Reset a customer Daily Spin cooldown')
+    .addUserOption(option =>
+      option.setName('user')
+        .setDescription('Customer whose Spin cooldown should be reset')
+        .setRequired(true)
+    );
+
+const spinResetAllCommand =
+  new SlashCommandBuilder()
+    .setName('spin-reset-all')
+    .setDescription('Reset all Daily Spin cooldowns');
+
+
 const languageCommand =
   new SlashCommandBuilder()
 
@@ -1038,6 +1162,16 @@ const commands = [
   couponListCommand,
 
   profileCommand,
+
+  spinSetupCommand,
+
+  spinCommand,
+
+  spinResultSetupCommand,
+
+  spinResetCommand,
+
+  spinResetAllCommand,
 
   languageCommand
 
@@ -1389,6 +1523,98 @@ client.on(
               ephemeral: true
             });
           }
+        }
+
+        // =========================
+        // DAILY SPIN COMMANDS
+        // =========================
+
+        if (interaction.commandName === 'spin-setup') {
+          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            return interaction.reply({
+              content: '❌ You do not have permission to set up the Daily Spin.',
+              ephemeral: true
+            });
+          }
+
+          if (!interaction.channel?.isTextBased()) {
+            return interaction.reply({
+              content: '❌ This command can only be used in a text channel.',
+              ephemeral: true
+            });
+          }
+
+          spinData.channelId = interaction.channel.id;
+          saveSpinData();
+
+          await interaction.reply({
+            content: '✅ Daily Spin channel configured.',
+            ephemeral: true
+          });
+
+          await interaction.channel.send({
+            embeds: [spinPanelEmbed()],
+            components: [spinButtonRow()]
+          });
+
+          return;
+        }
+
+        if (interaction.commandName === 'spin') {
+          if (!spinData.channelId) {
+            return interaction.reply({
+              content: '❌ The Daily Spin has not been set up yet.',
+              ephemeral: true
+            });
+          }
+
+          if (interaction.channelId !== spinData.channelId) {
+            return interaction.reply({
+              content: `❌ Daily Spin is only available in <#${spinData.channelId}>.`,
+              ephemeral: true
+            });
+          }
+
+          return interaction.reply({
+            embeds: [spinPanelEmbed()],
+            components: [spinButtonRow()]
+          });
+        }
+
+        if (interaction.commandName === 'spin-result-setup') {
+          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            return interaction.reply({ content: '❌ You do not have permission to set up the Daily Spin result channel.', ephemeral: true });
+          }
+          if (!interaction.channel?.isTextBased()) {
+            return interaction.reply({ content: '❌ This command can only be used in a text channel.', ephemeral: true });
+          }
+          spinData.resultChannelId = interaction.channel.id;
+          saveSpinData();
+          return interaction.reply({
+            content: '✅ Daily Spin result channel configured. Coupon codes will never be posted there.',
+            ephemeral: true
+          });
+        }
+
+        if (interaction.commandName === 'spin-reset') {
+          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            return interaction.reply({ content: '❌ You do not have permission to reset Daily Spin cooldowns.', ephemeral: true });
+          }
+          const user = interaction.options.getUser('user', true);
+          if (spinData.users?.[user.id]) {
+            delete spinData.users[user.id];
+            saveSpinData();
+          }
+          return interaction.reply({ content: `✅ Daily Spin cooldown reset for ${user}.`, ephemeral: true });
+        }
+
+        if (interaction.commandName === 'spin-reset-all') {
+          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            return interaction.reply({ content: '❌ You do not have permission to reset Daily Spin cooldowns.', ephemeral: true });
+          }
+          spinData.users = {};
+          saveSpinData();
+          return interaction.reply({ content: '✅ All Daily Spin cooldowns have been reset.', ephemeral: true });
         }
 
         // =========================
@@ -1786,6 +2012,104 @@ client.on(
       if (
         interaction.isButton()
       ) {
+
+        // =========================
+        // DAILY SPIN
+        // =========================
+
+        if (interaction.customId === 'daily_spin') {
+          if (!spinData.channelId || interaction.channelId !== spinData.channelId) {
+            return interaction.reply({
+              content: spinData.channelId
+                ? `❌ Daily Spin is only available in <#${spinData.channelId}>.`
+                : '❌ The Daily Spin has not been set up yet.',
+              ephemeral: true
+            });
+          }
+
+          const remaining = spinCooldown(interaction.user.id);
+          if (remaining > 0) {
+            return interaction.reply({
+              content: `⏰ **You already used your Daily Spin!**\n\nCome back in **${formatDuration(remaining)}**.`,
+              ephemeral: true
+            });
+          }
+
+          // Lock the spin before calculating the reward so a user
+          // cannot double-click and receive two rewards.
+          if (!spinData.users) spinData.users = {};
+          spinData.users[interaction.user.id] = {
+            lastSpinAt: Date.now()
+          };
+          saveSpinData();
+
+          const reward = getSpinReward();
+          let result;
+          let resultPublic;
+
+          if (reward.type === 'coupon') {
+            const code = createSpinCoupon(reward.discount, interaction.user.id);
+            result =
+              `🎉 **CONGRATULATIONS!**\n\n` +
+              `🎟️ You won a **${reward.discount}% OFF coupon!**\n\n` +
+              `🔐 Your coupon code will be given to you manually in a ticket.\n` +
+              `⏰ Valid for **24 hours**\n` +
+              `🔢 **1 use only**`;
+            resultPublic =
+              `🎉 **DAILY SPIN RESULT**\n\n` +
+              `👤 Customer: ${interaction.user}\n` +
+              `🎟️ Reward: **${reward.discount}% OFF Coupon**\n\n` +
+              `📩 Please open a ticket to claim your reward.\n` +
+              `🔒 Coupon code hidden`;
+          } else if (reward.type === 'xp') {
+            const data = getLoyalty(interaction.user.id);
+            const oldLevel = getLoyaltyLevel(data.xp).current.name;
+
+            data.xp += reward.xp;
+            data.lastSpinXpAt = Date.now();
+            writeJson(LOYALTY_FILE, loyalty);
+
+            const newLevel = getLoyaltyLevel(data.xp).current.name;
+
+            result =
+              `🎉 **CONGRATULATIONS!**\n\n` +
+              `⭐ You won **+${reward.xp} XP**!\n\n` +
+              `🏆 Current XP: **${data.xp.toLocaleString()} XP**` +
+              (oldLevel !== newLevel
+                ? `\n\n🚀 **LEVEL UP!** You reached **${getLoyaltyLevel(data.xp).current.emoji} ${newLevel}**!`
+                : '');
+            resultPublic =
+              `🎉 **DAILY SPIN RESULT**\n\n` +
+              `👤 Customer: ${interaction.user}\n` +
+              `⭐ Reward: **+${reward.xp} XP**\n` +
+              `🏆 Current XP: **${data.xp.toLocaleString()} XP**`;
+          } else {
+            result =
+              `😈 **No reward this time!**\n\n` +
+              `Better luck on your next spin. 🍀`;
+            resultPublic =
+              `🎰 **DAILY SPIN RESULT**\n\n` +
+              `👤 Customer: ${interaction.user}\n` +
+              `😈 Reward: **No Reward**\n\n` +
+              `🍀 Better luck next time!`;
+          }
+
+          if (spinData.resultChannelId) {
+            try {
+              const resultChannel = await interaction.client.channels.fetch(spinData.resultChannelId);
+              if (resultChannel?.isTextBased()) {
+                await resultChannel.send({ content: resultPublic });
+              }
+            } catch (err) {
+              console.error('Failed to send Daily Spin result:', err);
+            }
+          }
+
+          return interaction.reply({
+            content: result,
+            ephemeral: true
+          });
+        }
 
         // =========================
         // LANGUAGE SELECT
