@@ -1036,6 +1036,12 @@ const client =
 
   });
 
+// Prevent a Discord API/client error from becoming an unhandled
+// EventEmitter 'error' event and terminating the bot process.
+client.on('error', error => {
+  console.error('Discord client error (bot kept alive):', error);
+});
+
 // =========================
 // COMMANDS
 // =========================
@@ -2012,6 +2018,21 @@ client.on(
       if (
         interaction.isButton()
       ) {
+        // Acknowledge component interactions immediately. Discord requires the
+        // initial response within ~3 seconds. Modal-opening buttons are the
+        // exception because showModal() must be the initial response.
+        const opensModal =
+          interaction.customId === 'coupon_apply' ||
+          interaction.customId.startsWith('select_rating:');
+
+        if (!opensModal) {
+          try {
+            await interaction.deferUpdate();
+          } catch (error) {
+            console.error('Could not acknowledge button interaction:', error);
+            return;
+          }
+        }
 
         // =========================
         // DAILY SPIN
@@ -2019,7 +2040,7 @@ client.on(
 
         if (interaction.customId === 'daily_spin') {
           if (!spinData.channelId || interaction.channelId !== spinData.channelId) {
-            return interaction.reply({
+            return interaction.followUp({
               content: spinData.channelId
                 ? `❌ Daily Spin is only available in <#${spinData.channelId}>.`
                 : '❌ The Daily Spin has not been set up yet.',
@@ -2029,7 +2050,7 @@ client.on(
 
           const remaining = spinCooldown(interaction.user.id);
           if (remaining > 0) {
-            return interaction.reply({
+            return interaction.followUp({
               content: `⏰ **You already used your Daily Spin!**\n\nCome back in **${formatDuration(remaining)}**.`,
               ephemeral: true
             });
@@ -2105,7 +2126,7 @@ client.on(
             }
           }
 
-          return interaction.reply({
+          return interaction.followUp({
             content: result,
             ephemeral: true
           });
@@ -2137,7 +2158,7 @@ client.on(
             interaction.user.id
           ) {
 
-            return interaction.reply({
+            return interaction.followUp({
 
               content:
                 '❌ Only the customer who opened this ticket can choose the language.',
@@ -2155,7 +2176,7 @@ client.on(
             ]
           ) {
 
-            return interaction.reply({
+            return interaction.followUp({
 
               content:
                 '❌ Invalid language.',
@@ -2199,7 +2220,7 @@ client.on(
                 selectedLanguage
               );
 
-            await interaction.update({
+            await interaction.editReply({
 
               content:
                 `<@${interaction.user.id}>`,
@@ -2223,7 +2244,7 @@ client.on(
 
           else {
 
-            await interaction.update({
+            await interaction.editReply({
 
               content:
 
@@ -2259,13 +2280,13 @@ client.on(
         if (interaction.customId === 'loyalty_profile') {
           const customer = await findTicketCustomer(interaction.channel);
           if (customer && customer.id !== interaction.user.id) {
-            return interaction.reply({
+            return interaction.followUp({
               content: '❌ Only the customer who opened this ticket can view this profile button.',
               ephemeral: true
             });
           }
 
-          return interaction.reply({
+          return interaction.followUp({
             embeds: [loyaltyProfileEmbed(interaction.user)],
             ephemeral: true
           });
@@ -2303,7 +2324,7 @@ client.on(
 
           if (!code) {
 
-            return interaction.reply({
+            return interaction.followUp({
 
               content:
                 '❌ Could not find the code in this delivery message.',
@@ -2315,7 +2336,7 @@ client.on(
 
           }
 
-          await interaction.reply({
+          await interaction.followUp({
 
             content:
 
@@ -2343,11 +2364,6 @@ client.on(
 
           if (!data) {
             return interaction.reply({ content: '❌ No ticket price has been set yet.', ephemeral: true });
-          }
-
-          const customer = await findTicketCustomer(interaction.channel);
-          if (!customer || customer.id !== interaction.user.id) {
-            return interaction.reply({ content: '❌ Only the customer who opened this ticket can apply a coupon.', ephemeral: true });
           }
 
           if (data.couponCode) {
@@ -2379,12 +2395,12 @@ client.on(
           const data = ticketPrices[ticketId];
 
           if (!data) {
-            return interaction.reply({ content: '❌ No ticket price has been set yet.', ephemeral: true });
+            return interaction.followUp({ content: '❌ No ticket price has been set yet.', ephemeral: true });
           }
 
           const customer = await findTicketCustomer(interaction.channel);
           if (!customer || customer.id !== interaction.user.id) {
-            return interaction.reply({ content: '❌ Only the customer who opened this ticket can remove the coupon.', ephemeral: true });
+            return interaction.followUp({ content: '❌ Only the customer who opened this ticket can remove the coupon.', ephemeral: true });
           }
 
           // If a coupon was applied, return its usage when the customer removes it.
@@ -2408,7 +2424,7 @@ client.on(
           writeJson(TICKET_PRICES_FILE, ticketPrices);
 
           const lang = getLanguage(interaction.user.id);
-          return interaction.update({
+          return interaction.editReply({
             content: '🗑️ Coupon removed.',
             embeds: [couponPriceEmbed(lang, ticketId)],
             components: [couponButtons()]
@@ -2445,7 +2461,7 @@ client.on(
             ratings[ratingKey]
           ) {
 
-            return interaction.reply({
+            return interaction.followUp({
 
               content:
                 t.alreadyRated,
@@ -2492,7 +2508,7 @@ client.on(
 
             );
 
-          await interaction.reply({
+          await interaction.followUp({
 
             content:
 
@@ -2581,7 +2597,7 @@ client.on(
             ratings[ratingKey]
           ) {
 
-            return interaction.update({
+            return interaction.reply({
 
               content:
                 t.alreadyRated,
@@ -2667,7 +2683,7 @@ client.on(
 
           if (!oldEmbed) {
 
-            return interaction.reply({
+            return interaction.followUp({
 
               content:
                 '❌ Delivery message could not be read.',
@@ -2808,7 +2824,7 @@ client.on(
                 ButtonStyle.Primary
               );
 
-          await interaction.update({
+          await interaction.editReply({
 
             embeds: [
               completedEmbed
@@ -3392,6 +3408,14 @@ client.on(
 // =========================
 // DISCORD TOKEN
 // =========================
+
+process.on('unhandledRejection', error => {
+  console.error('Unhandled promise rejection (bot kept alive):', error);
+});
+
+process.on('uncaughtException', error => {
+  console.error('Uncaught exception (bot kept alive):', error);
+});
 
 const DISCORD_TOKEN =
   process.env.DISCORD_TOKEN
